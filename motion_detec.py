@@ -31,7 +31,7 @@ def find_Arducam():
                 if ret:
                     shape = frame.shape  # (height, width, channels)
                     h, w, c = shape
-                    if w == 3840 and h == 2160 and c ==3: 
+                    if w == 3840 and h == 2160 and c ==3:
                         index = i
                         print(f"Saving Arducam as index {i}!")
                 else:
@@ -41,14 +41,14 @@ def find_Arducam():
 
 
 def write_log(info, message, verbose):
-    current_timestamp = time.time()   
+    current_timestamp = time.time()
     # Convert the timestamp to the desired format
     current_time = time.strftime('%Y/%m/%d %H:%M:%S', time.localtime(current_timestamp))
     cout = f'{info} {current_time} : {message}  \n'
     with open('thermal_outputs.log', 'a') as file:
         if verbose == 1:
             print(cout)
-        file.write(cout)  
+        file.write(cout)
 
 
 def display_temperature(img, val_k, loc, color):
@@ -60,6 +60,8 @@ def display_temperature(img, val_k, loc, color):
     x, y = loc
     cv2.line(img, (x - 2, y), (x + 2, y), color, 1)
     cv2.line(img, (x, y - 2), (x, y + 2), color, 1)
+
+
 
 
 # Configuration
@@ -76,7 +78,6 @@ def load_config():
     duration = config.getint('Time','duration')
     output = config.get('Output', 'folder')
     return cam_name, h, w, temp_max, temp_min, thresh, duration, index, output
-
 
 
 def raw_to_colored(data, min_temp, max_temp):
@@ -97,59 +98,96 @@ def raw_to_colored(data, min_temp, max_temp):
     colored_img = cv2.applyColorMap(data_normalized, cv2.COLORMAP_HOT)
     return colored_img
 
+
 # Convert raw data to temperature
 def ktoc(val):
     return (val - 27315) / 100.0
 
 
-# RGB Camera Capture Thread
-def capture_rgb(current_time):
-    width, height = w, h
-    ret, frame = cap.read()
-    if not ret:
-        write_log(info = "ERROR", message = "Error: Could not read RGB frame.", verbose = 1)
-        return
-
-    frame = cv2.resize(frame, (width, height))
-   
-
-    # Ensure "RGB" folder exists inside output_folder
-
-    
-    frame_path = os.path.join(rgb_folder, f"{current_time}.jpg")
-    
-    success = cv2.imwrite(frame_path, frame)  # Save frame
-    if success:
-        write_log(info = "INFO", message = f"Saved RGB frame: {frame_path}", verbose = 1)
-    else:
-        write_log(info = "ERROR", message = f"Error: Could not save RGB frame at {frame_path}", verbose = 1)
-
-
-# Thermal Frame Callback
+# Callback function to receive frames from libuvc
 def py_frame_callback(frame, userptr):
-    array_pointer = cast(frame.contents.data, POINTER(c_uint16 * (frame.contents.width * frame.contents.height)))
-    data = np.frombuffer(array_pointer.contents, dtype=np.uint16).reshape(frame.contents.height, frame.contents.width)
-
-    if not q.full():
-        q.put(data)
+    frame_data = cast(frame.contents.data, POINTER(c_uint16 * (frame.contents.width * frame.contents.height)))
+    data = np.frombuffer(frame_data.contents, dtype=np.uint16).reshape((frame.contents.height, frame.contents.width))
+    q.put(data)
 
 
-##########################################################################
-#---------------End of Util Functions -----------------------------------#
-##########################################################################
 
-# Open Arducam
+# Thermal thread class
+class ThermalCaptureThread(threading.Thread):
+    def __init__(self, duration, temp_min, temp_max, w, h, output_folder):
+        super().__init__()
+        self.running = threading.Event()
+        self.running.set()
+        self.duration = duration
+        self.temp_min = temp_min
+        self.temp_max = temp_max
+        self.w = w
+        self.h = h
+        self.output_folder = output_folder
+        self.PTR_PY_FRAME_CALLBACK = CFUNCTYPE(None, POINTER(uvc_frame), c_void_p)(py_frame_callback)
+
+    def stop(self):
+        self.running.clear()
+
+    def run(self):
+        ctx, dev, devh, ctrl = POINTER(uvc_context)(), POINTER(uvc_device)(), POINTER(uvc_device_handle)(), uvc_stream_ctrl()
+        res = libuvc.uvc_init(byref(ctx), 0)
+        if res < 0:
+            write_log("ERROR", "uvc_init error", 1)
+            return
+
+        try:
+            res = libuvc.uvc_find_device(ctx, byref(dev), PT_USB_VID, PT_USB_PID, 0)
+            if res < 0:
+                write_log("ERROR", "uvc_find_device error", 1)
+                return
+
+            res = libuvc.uvc_open(dev, byref(devh))
+            if res < 0:
+                write_log("ERROR", "uvc_open error", 1)
+                return
+
+            frame_formats = uvc_get_frame_formats_by_guid(devh, VS_FMT_GUID_Y16)
+            libuvc.uvc_get_stream_ctrl_format_size(
+                devh, byref(ctrl), UVC_FRAME_FORMAT_Y16,
+                frame_formats[0].wWidth, frame_formats[0].wHeight,
+                int(1e7 / frame_formats[0].dwDefaultFrameInterval)
+            )
+
+            libuvc.uvc_start_streaming(devh, byref(ctrl), self.PTR_PY_FRAME_CALLBACK, None, 0)
+            write_log("INFO", "Thermal camera started", 1)
+
+            start_time = time.time()
+            while self.running.is_set() and (time.time() - start_time < self.duration):
+                try:
+                    data = q.get(timeout=1)
+                    data_resized = cv2.resize(data[:, :], (self.w, self.h))  # Use config-defined w and h
+                    colored_img = raw_to_colored(data_resized, self.temp_min, self.temp_max)
+
+                    # Save image
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                    filename = os.path.join(self.output_folder, "color_thermal", f"thermal_{timestamp}.jpg")
+                    cv2.imwrite(filename, colored_img)
+                    write_log("SAVE", f"Saved image: {filename}", 1)
+                except:
+                    continue
+
+            libuvc.uvc_stop_streaming(devh)
+            write_log("INFO", "Thermal camera stopped", 1)
+
+        finally:
+            libuvc.uvc_exit(ctx)
+
+
+
+################################################################################
+################################################################################
 index = find_Arducam()
-cap = cv2.VideoCapture(index)
-if not cap.isOpened():
-    write_log(info = "ERROR", message = "Could not open RGB camera", verbose = 1)
-    exit()
 
+cap = cv2.VideoCapture(index, cv2.CAP_V4L2)
 
 #Import program parameters
 cam_name, h, w, temp_max, temp_min, thresh, duration, index, output = load_config()
-
-
 
 # Ensure output folder exists
 output_folder = os.path.join(output, f"{cam_name}_{datetime.now().strftime('%Y_%m_%d')}")
@@ -161,64 +199,68 @@ os.makedirs(rgb_folder, exist_ok=True)  # <-- FIX
 write_log(info = "INFO", message = f"Created directory: {output_folder}", verbose = 1)
 
 
-#PTR_PY_FRAME_CALLBACK = CFUNCTYPE(None, POINTER(uvc_frame), c_void_p)(py_frame_callback)
 
-
-#Initialize Background as float 
+#Initialize Background as float
 ret, background = cap.read()
 background_gray = cv2.cvtColor(background, cv2.COLOR_BGR2GRAY)
-background_gray = cv2.resize(background_gray[:,:], (w, h))
 background_float = background_gray.astype("float")
 
 alpha = 0.05
-trigger_threshold = 1500
-x_size = 300
-y_size = 100
+trigger_threshold = 5000
+
+motion_detected = False
+last_motion_time = time.time()
+thermal_thread = None
+cooldown_seconds = 10
+
 while True:
     ret, frame = cap.read()
-    frame = cv2.resize(frame[:,:],(w,h))
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
     cv2.accumulateWeighted(gray, background_float, alpha)
     background_gray = cv2.convertScaleAbs(background_float)
 
-    offset = gray.shape[0] //4 
-    center_x, center_y = gray.shape[1] // 2, gray.shape[0] // 2 + offset
-    top_left_x = center_x - x_size // 2
-    top_left_y = center_y - y_size // 2
-    bottom_right_x = center_x + x_size // 2
-    bottom_right_y = center_y + y_size // 2
-    
-    
+    box_size = 100
+    center_x, center_y = gray.shape[1] // 2, gray.shape[0] // 2
+    top_left_x = center_x - box_size // 2
+    top_left_y = center_y - box_size // 2
+    bottom_right_x = center_x + box_size // 2
+    bottom_right_y = center_y + box_size // 2
+
     # Compute absolute difference
     diff = cv2.absdiff(background_gray, gray)
     _, thresh = cv2.threshold(diff, 25, 255, cv2.THRESH_BINARY)
 
     # Crop the central ROI box where cow is expected
-    roi = thresh[center_y-y_size:center_y+y_size, center_x-x_size:center_x+x_size]
+    roi = thresh[center_y-box_size:center_y+box_size, center_x-box_size:center_x+box_size]
     motion_score = cv2.countNonZero(roi)
     #print(motion_score)
 
     # Save RGB image if motion is above threshold
     if motion_score > trigger_threshold:
-        # Draw bounding box on the grayscale frame before saving
-        annotated = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)  # Convert back to BGR to draw in color
-        #cv2.rectangle(
-        ##    annotated,
-        #    (top_left_x, top_left_y),
-        #    (bottom_right_x, bottom_right_y),
-        #    (0, 255, 0), 2
-        #    )
-
+        last_motion_time = time.time()
+        if not motion_detected:
+            motion_detected = True
+            write_log("INFO", "Motion detected — starting thermal camera", 1)
+            # Start thermal thread
+            if thermal_thread is None or not thermal_thread.is_alive():
+                thermal_thread = ThermalCaptureThread( duration=duration,temp_min=temp_min,temp_max=temp_max,w=w,h=h,output_folder=output_folder)
+                thermal_thread.start()
+        # Save RGB snapshot
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         filename = os.path.join(rgb_folder, f"rgb_{timestamp}.jpg")
         cv2.imwrite(filename, frame)
         write_log(info="SAVE", message=f"Saved image: {filename}", verbose=1)
-        
-        
+    elif motion_detected and (time.time() - last_motion_time > cooldown_seconds):
+        motion_detected = False
+        write_log("INFO", "Motion ended — stopping thermal camera", 1)
+        if thermal_thread and thermal_thread.is_alive():
+            thermal_thread.stop()
+            thermal_thread.join()
+            thermal_thread = None
 
 
 
-        
 
 
 
