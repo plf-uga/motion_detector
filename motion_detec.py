@@ -169,6 +169,7 @@ class ThermalCaptureThread(threading.Thread):
                     filename = os.path.join(self.output_folder, "color_thermal", f"thermal_{timestamp}.jpg")
                     cv2.imwrite(filename, colored_img)
                     write_log("SAVE", f"Saved image: {filename}", 1)
+                    time.sleep(1)
                 except:
                     continue
 
@@ -249,8 +250,9 @@ while True:
         # Save RGB snapshot
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         filename = os.path.join(rgb_folder, f"rgb_{timestamp}.jpg")
-        cv2.imwrite(filename, frame)
+        cv2.imwrite(filename, frame)        
         write_log(info="SAVE", message=f"Saved image: {filename}", verbose=1)
+        time.sleep()
     elif motion_detected and (time.time() - last_motion_time > cooldown_seconds):
         motion_detected = False
         write_log("INFO", "Motion ended — stopping thermal camera", 1)
