@@ -1,0 +1,18 @@
+[Camera]
+cam_name = new
+img_height = 350
+img_width = 650
+
+[Temperature]
+temp_max = 40
+temp_min = 30
+temp_trigger = 36
+
+[Time]
+duration =10 
+trigger_duration = 2
+
+[Output]
+folder = /home/alveslab/motion_thermal/thermal_data
+
+
