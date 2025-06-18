@@ -252,7 +252,7 @@ while True:
         filename = os.path.join(rgb_folder, f"rgb_{timestamp}.jpg")
         cv2.imwrite(filename, frame)        
         write_log(info="SAVE", message=f"Saved image: {filename}", verbose=1)
-        time.sleep()
+        time.sleep(1)
     elif motion_detected and (time.time() - last_motion_time > cooldown_seconds):
         motion_detected = False
         write_log("INFO", "Motion ended — stopping thermal camera", 1)
