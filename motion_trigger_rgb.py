@@ -14,7 +14,7 @@ LOCK_FILE = "thermal_capture.lock"
 python_path = "/usr/bin/python3"
 script_path = "temp_capture.py"
 
-os.chdir("/home/alveslab/motion_thermal")
+os.chdir("/home/alveslab/motion_detector")
 
 def is_thermal_running():
     return os.path.exists(LOCK_FILE)
@@ -122,7 +122,7 @@ background_gray = cv2.cvtColor(background, cv2.COLOR_BGR2GRAY)
 background_gray = cv2.resize(background_gray[:,:], (w, h))
 background_float = background_gray.astype("float")
 
-trigger_threshold = 1500
+trigger_threshold = 5000
 x_size = 300
 y_size = 100
 alpha = 0.05
