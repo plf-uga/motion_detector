@@ -12,7 +12,7 @@ BUF_SIZE = 2
 q = Queue(BUF_SIZE)
 
 LOCK_FILE = "thermal_capture.lock"
-os.chdir("/home/alveslab/motion_thermal")
+os.chdir("/home/alveslab/motion_detector")
 
 
 ##########################################################################
