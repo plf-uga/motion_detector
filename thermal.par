@@ -13,6 +13,6 @@ duration =10
 trigger_duration = 2
 
 [Output]
-folder = /home/alveslab/motion_thermal/thermal_data
+folder = /home/alveslab/motion_detector/thermal_data
 
 
