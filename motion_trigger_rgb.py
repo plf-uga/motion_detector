@@ -168,6 +168,7 @@ while True:
             rgb_filename = os.path.join(rgb_folder, f"rgb_{timestamp}.jpg")
             cv2.imwrite(rgb_filename, frame)
             write_log("SAVE", f"RGB image saved: {rgb_filename}", verbose = 1)
+            time.sleep(1)
 
             if not is_thermal_running():
                 write_log("INFO", "Motion detected — launching thermal capture script", verbose = 1)
